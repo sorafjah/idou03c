@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, minimum-scale=1, user-scalable=no" />
   <title>地図移動</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.min.js"></script>
@@ -10,7 +10,7 @@
   <meta name="theme-color" content="#ffffff">
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap');
-    body { font-family: 'Inter', system-ui, -apple-system, sans-serif; overscroll-behavior: none; }
+    body { font-family: 'Inter', system-ui, -apple-system, sans-serif; overscroll-behavior: none; touch-action: manipulation; }
 
     :root{
       /* くすみ水色（壁色）*/
@@ -52,6 +52,8 @@
     /* 壁スタイル（くすみ水色） */
     .wall-cell { background-color: var(--muted-sky); }
     .setting-wall-cell { background-color: var(--muted-sky-dark); }
+    /* 右上メッセージは非表示 */
+    #message-area{ display:none; }
   </style>
 </head>
 <body class="bg-gray-100 text-gray-800 h-screen w-screen overflow-hidden">
@@ -202,7 +204,12 @@
     });
 
     function playTone(freqOrNote, dur){ if(synth) synth.triggerAttackRelease(freqOrNote,dur); }
-    function sayWaai(){ try{ const u=new SpeechSynthesisUtterance('わーい！'); u.lang='ja-JP'; window.speechSynthesis.speak(u);}catch(e){} }
+    function playSuccess(){
+      if(!synth) return;
+      const now = Tone.now();
+      const notes = ['C5','E5','G5','C6'];
+      notes.forEach((n,i)=>synth.triggerAttackRelease(n, 0.12, now + i*0.12));
+    }
 
     // 状態
     const allWaypointIcons = ['🍔','🍎','🍰','🍉','🍓','🍇','🥝','🍍','🍕','🍩','🥐','🍗','❤️','💚','💛','💙','🩷'];
@@ -451,7 +458,6 @@
       gameState.sequence=[];
       updateSequenceDisplay();
       setMoveMode('absolute');
-      messageArea.textContent='';
     }
     function showGameView(){
       settingsView.classList.add('hidden');
@@ -506,7 +512,6 @@
 
     async function runSequence(){
       gameState.isRunning=true; setDisabled(true);
-      messageArea.textContent='実行中...';
       resetPlayer();
       await delay(200);
       while(gameState.sequence.length>0){
@@ -536,9 +541,8 @@
         else if(action==='turnLeft'){ const map={up:'left', left:'down', down:'right', right:'up'}; changeDirection(map[cur]); }
       }
       if(moved){
-        if(nr<0||nr>=gameConfig.gridRows||nc<0||nc>=gameConfig.gridCols){ messageArea.textContent='マップ外に出ました'; return false; }
+        if(nr<0||nr>=gameConfig.gridRows||nc<0||nc>=gameConfig.gridCols){  return false; }
         if(gameConfig.walls.some(w=>w.row===nr&&w.col===nc) || gameConfig.impassables.some(w=>w.row===nr&&w.col===nc)){ 
-          messageArea.textContent='通行不可です'; 
           return false; 
         }
         gameState.player.row=nr; gameState.player.col=nc;
@@ -580,17 +584,9 @@
       const atGoal = gameState.player.row===gameConfig.goal.row && gameState.player.col===gameConfig.goal.col;
       const all = gameState.collectedWaypoints.size===gameConfig.waypoints.length;
       if(atGoal && all){
-        messageArea.textContent='🎉 クリア！おめでとう！';
-        playTone(880,0.3);
-        sayWaai();
+        playSuccess();
         const goal=document.getElementById(`cell-${gameConfig.goal.row}-${gameConfig.goal.col}`);
         if(goal){ goal.classList.add('effect-tada'); setTimeout(()=>goal.classList.remove('effect-tada'),1000); }
-      }
-      else if(atGoal){
-        messageArea.textContent=`ゴール！ 通過地点: ${gameState.collectedWaypoints.size}/${gameConfig.waypoints.length}`;
-      }
-      else if(messageArea.textContent==='実行中...'){
-        messageArea.textContent='未到達';
       }
     }
 
@@ -618,7 +614,51 @@
     function randomEmpty(rows,cols,used){ let r,c,s; do{ r=rand(0,rows-1); c=rand(0,cols-1); s=`${r},${c}`; }while(used.has(s)); used.add(s); return {row:r,col:c}; }
 
     function flashError(msg){ settingsError.textContent=msg; setTimeout(()=>settingsError.textContent='',1800); }
-    function toast(msg){ messageArea.textContent=msg; setTimeout(()=>{ if(messageArea.textContent===msg) messageArea.textContent=''; },1500); }
+    function toast(msg){} // メッセージ非表示仕様のため空実装
+
+    // ========== 簡易スモークテスト（開発用／UI非依存） ==========
+    function runSmokeTests(){
+      const results = [];
+      // 1) 移動の基本（3x3, 壁なし）
+      const cfg1 = { gridRows:3, gridCols:3, start:{row:1,col:1}, goal:{row:0,col:1}, waypoints:[], walls:[], impassables:[] };
+      const seq1 = ['up'];
+      const r1 = simulate(cfg1, seq1);
+      results.push(['移動基本: upで(0,1)へ', r1.row===0 && r1.col===1]);
+
+      // 2) 壁衝突（進めない）
+      const cfg2 = { gridRows:3, gridCols:3, start:{row:1,col:1}, goal:{row:0,col:1}, waypoints:[], walls:[{row:0,col:1}], impassables:[] };
+      const r2 = simulate(cfg2, ['up']);
+      results.push(['壁衝突で停止', r2.row===1 && r2.col===1]);
+
+      // 3) 相対方位の回転→前進
+      const cfg3 = { gridRows:3, gridCols:3, start:{row:1,col:1}, goal:{row:1,col:2}, waypoints:[], walls:[], impassables:[] };
+      const r3 = simulate(cfg3, ['turnRight','forward'], 'relative');
+      results.push(['右を向いて前進で(1,2)', r3.row===1 && r3.col===2]);
+
+      console.log('[SmokeTests]', results.map(([name, ok])=>`${ok?'✅':'❌'} ${name}`).join(' / '));
+    }
+
+    function simulate(cfg, seq, mode='absolute'){
+      let r=cfg.start.row, c=cfg.start.col, dir='up';
+      const isBlocked = (nr,nc)=> nr<0||nr>=cfg.gridRows||nc<0||nc>=cfg.gridCols || cfg.walls.some(w=>w.row===nr&&w.col===nc) || cfg.impassables.some(w=>w.row===nr&&w.col===nc);
+      for(const a of seq){
+        if(mode==='absolute'){
+          if(a==='up')   { if(!isBlocked(r-1,c)) r--; }
+          if(a==='down') { if(!isBlocked(r+1,c)) r++; }
+          if(a==='left') { if(!isBlocked(r,c-1)) c--; }
+          if(a==='right'){ if(!isBlocked(r,c+1)) c++; }
+        }else if(mode==='relative'){
+          if(a==='turnRight') dir = ({up:'right',right:'down',down:'left',left:'up'})[dir];
+          else if(a==='turnLeft') dir = ({up:'left',left:'down',down:'right',right:'up'})[dir];
+          else if(a==='forward'){
+            const mv = {up:[-1,0],down:[1,0],left:[0,-1],right:[0,1]}[dir];
+            const nr=r+mv[0], nc=c+mv[1];
+            if(!isBlocked(nr,nc)){ r=nr; c=nc; }
+          }
+        }
+      }
+      return {row:r, col:c};
+    }
 
     // SW
     if('serviceWorker' in navigator){ navigator.serviceWorker.register('sw.js').catch(()=>{}); }
@@ -626,6 +666,17 @@
     // 初期（5×6固定）
     updateSettingGrid();
     setMoveMode('absolute');
+    runSmokeTests();
+
+    // iPadの拡大防止（ダブルタップ／ピンチ）
+    document.addEventListener('dblclick', e => e.preventDefault(), { passive:false });
+    let lastTouchEnd = 0;
+    document.addEventListener('touchend', e => {
+      const now = Date.now();
+      if(now - lastTouchEnd <= 300){ e.preventDefault(); }
+      lastTouchEnd = now;
+    }, { passive:false });
+    document.addEventListener('gesturestart', e => e.preventDefault());
   });
   </script>
 </body>
